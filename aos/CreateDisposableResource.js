@@ -18,9 +18,10 @@ module.exports = function CreateDisposableResource(V, hint, method) {
 	var methodPresent = arguments.length > 2;
 	if (!methodPresent) { // step 1
 		if (V === null || V === void undefined) { // step 1.a
-			// eslint-disable-next-line no-param-reassign
+			/* eslint-disable no-param-reassign */
 			V = void undefined; // step 1.a.i
-			// step 1.a.ii: Set method to undefined. (already undefined since not passed)
+			method = void undefined; // step 1.a.ii
+			/* eslint-enable no-param-reassign */
 		} else { // step 1.b
 			if (!isObject(V)) {
 				throw new $TypeError('`V` must be an Object, or `null` or `undefined`'); // step 1.b.i

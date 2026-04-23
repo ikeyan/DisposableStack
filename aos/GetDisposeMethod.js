@@ -23,9 +23,6 @@ module.exports = function GetDisposeMethod(V, hint) {
 	if (hint !== 'SYNC-DISPOSE' && hint !== 'ASYNC-DISPOSE') {
 		throw new $SyntaxError('Assertion failed: `hint` must be `~SYNC-DISPOSE~` or `~ASYNC-DISPOSE~`');
 	}
-	if (!symbolDispose) {
-		throw new $SyntaxError('`Symbol.dispose` is not supported');
-	}
 
 	var method;
 	if (hint === 'ASYNC-DISPOSE') { // step 1
@@ -33,9 +30,11 @@ module.exports = function GetDisposeMethod(V, hint) {
 			method = GetMethod(V, symbolAsyncDispose); // step 1.a
 		}
 		if (method === void undefined) { // step 1.b
+			if (!symbolDispose) {
+				throw new $SyntaxError('`Symbol.dispose` is not supported');
+			}
 			method = GetMethod(V, symbolDispose); // step 1.b.i
 			if (method !== void undefined) { // step 1.b.ii
-				var innerMethod = method;
 				// step 1.b.ii.1: a closure that wraps a sync @@dispose so the
 				// returned Promise is not awaited and any exception is not
 				// thrown synchronously.
@@ -43,7 +42,7 @@ module.exports = function GetDisposeMethod(V, hint) {
 					var O = this; // step 1.b.ii.1.a
 					var promiseCapability = NewPromiseCapability($Promise); // step 1.b.ii.1.b
 					try {
-						Call(innerMethod, O); // step 1.b.ii.1.c (Completion(Call(method, O)))
+						Call(method, O); // step 1.b.ii.1.c (Completion(Call(method, O)))
 					} catch (e) {
 						// step 1.b.ii.1.d: IfAbruptRejectPromise
 						Call(promiseCapability['[[Reject]]'], void undefined, [e]);
@@ -55,6 +54,9 @@ module.exports = function GetDisposeMethod(V, hint) {
 			}
 		}
 	} else { // step 2
+		if (!symbolDispose) {
+			throw new $SyntaxError('`Symbol.dispose` is not supported');
+		}
 		method = GetMethod(V, symbolDispose); // step 2.a
 	}
 
