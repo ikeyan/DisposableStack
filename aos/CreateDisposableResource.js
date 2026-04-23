@@ -9,34 +9,32 @@ var isObject = require('es-abstract/helpers/isObject');
 
 var GetDisposeMethod = require('./GetDisposeMethod');
 
-module.exports = function CreateDisposableResource(V, hint) {
+// https://tc39.es/proposal-explicit-resource-management/#sec-createdisposableresource
+module.exports = function CreateDisposableResource(V, hint, method) {
 	if (hint !== 'SYNC-DISPOSE' && hint !== 'ASYNC-DISPOSE') {
 		throw new $SyntaxError('Assertion failed: `hint` must be `~SYNC-DISPOSE~` or `~ASYNC-DISPOSE~`');
 	}
 
-	var method;
-	if (arguments.length < 3) { // step 1
-		if (V == null) { // step 1.a
+	var methodPresent = arguments.length > 2;
+	if (!methodPresent) { // step 1
+		if (V === null || V === void undefined) { // step 1.a
 			// eslint-disable-next-line no-param-reassign
 			V = void undefined; // step 1.a.i
-			method = void undefined; // step 1.a.ii
-		} else {
-			if (typeof V !== 'undefined' && !isObject(V)) {
-				throw new $TypeError('`V` must be an Object, or `null` or `undefined`'); // step 1.b.i
+			// step 1.a.ii: Set method to undefined. (already undefined since not passed)
+		} else { // step 1.b
+			if (!isObject(V)) {
+				throw new $TypeError('`V` must be an Object'); // step 1.b.i
 			}
-
+			// eslint-disable-next-line no-param-reassign
 			method = GetDisposeMethod(V, hint); // step 1.b.ii
-
-			if (typeof method === 'undefined') {
-				throw new $TypeError('dispose method must not be `undefined` on `V` when an object `V` is provided'); // step 1.b.i
+			if (method === void undefined) {
+				throw new $TypeError('dispose method must not be `undefined` on `V` when an object `V` is provided'); // step 1.b.iii
 			}
 		}
-	} else { // step 2
-		method = arguments[2];
-		if (!IsCallable(method)) {
-			throw new $TypeError('`method`, when provided, must be a function'); // step 2.a
-		}
+	} else if (!IsCallable(method)) { // step 2
+		throw new $TypeError('`method`, when provided, must be a function'); // step 2.a
 	}
+
 	return { // step 3
 		'[[ResourceValue]]': V,
 		'[[Hint]]': hint,

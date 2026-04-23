@@ -15,8 +15,8 @@ var DefinePropertyOrThrow = require('es-abstract/2025/DefinePropertyOrThrow');
 var DisposeResources = require('../aos/DisposeResources');
 var IsCallable = require('es-abstract/2025/IsCallable');
 var NewDisposeCapability = require('../aos/NewDisposeCapability');
+var NewPromiseCapability = require('es-abstract/2025/NewPromiseCapability');
 var NormalCompletion = require('es-abstract/2025/NormalCompletion');
-var PromiseResolve = require('es-abstract/2025/PromiseResolve');
 
 var SLOT = require('internal-slot');
 var setToStringTag = require('es-set-tostringtag');
@@ -65,24 +65,45 @@ var markDisposed = function markDisposed(asyncDisposableStack) {
 	}
 };
 
+// https://tc39.es/proposal-explicit-resource-management/#sec-asyncdisposablestack.prototype.disposeAsync
 CreateMethodProperty(AsyncDisposableStack.prototype, 'disposeAsync', function disposeAsync() {
 	var asyncDisposableStack = this; // step 1
+	var promiseCapability = NewPromiseCapability($Promise); // step 2
 
-	if (isDisposed(asyncDisposableStack)) { // steps 2-3
-		return PromiseResolve($Promise); // step 3
+	if (!SLOT.has(asyncDisposableStack, '[[AsyncDisposableState]]')) { // step 3
+		Call(promiseCapability['[[Reject]]'], void undefined, [new $TypeError('`this` must be an AsyncDisposableStack')]); // step 3.a
+		return promiseCapability['[[Promise]]']; // step 3.b
 	}
 
-	markDisposed(asyncDisposableStack); // step 4
+	if (isDisposed(asyncDisposableStack)) { // step 4
+		Call(promiseCapability['[[Resolve]]'], void undefined, [void undefined]); // step 4.a
+		return promiseCapability['[[Promise]]']; // step 4.b
+	}
 
-	return $then(
-		PromiseResolve(
-			$Promise,
-			DisposeResources(SLOT.get(asyncDisposableStack, '[[DisposeCapability]]'), NormalCompletion())
-		),
-		function (completion) {
-			return completion['?'](); // step 5
+	markDisposed(asyncDisposableStack); // step 5
+
+	// step 6: Let result be DisposeResources(..., NormalCompletion(*undefined*)).
+	// DisposeResources in the shim returns a Completion Record when no Await
+	// effect was triggered (empty stack), or a Promise that resolves to a
+	// Completion Record otherwise (the Promise stands in for the chain of
+	// Await effects inside the spec's DisposeResources).
+	var result = DisposeResources(SLOT.get(asyncDisposableStack, '[[DisposeCapability]]'), NormalCompletion(void undefined));
+
+	var settle = function settle(completion) {
+		if (completion.type() === 'throw') { // step 7: IfAbruptRejectPromise(result, promiseCapability)
+			Call(promiseCapability['[[Reject]]'], void undefined, [completion.value()]);
+		} else { // step 8 (after IfAbruptRejectPromise unwraps result)
+			Call(promiseCapability['[[Resolve]]'], void undefined, [completion.value()]);
 		}
-	);
+	};
+
+	if (result && typeof result.then === 'function') {
+		$then(result, settle);
+	} else {
+		settle(result);
+	}
+
+	return promiseCapability['[[Promise]]']; // step 9
 });
 
 CreateMethodProperty(AsyncDisposableStack.prototype, 'use', function use(value) {

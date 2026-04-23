@@ -2,112 +2,139 @@
 
 var GetIntrinsic = require('get-intrinsic');
 
-var $SyntaxError = require('es-errors/syntax');
 var $TypeError = require('es-errors/type');
 var $Promise = GetIntrinsic('%Promise%', true);
 
 var callBound = require('call-bound');
 var $then = callBound('Promise.prototype.then', true);
 
+var Call = require('es-abstract/2025/Call');
 var CompletionRecord = require('es-abstract/2025/CompletionRecord');
-var Dispose = require('./Dispose');
 var PromiseResolve = require('es-abstract/2025/PromiseResolve');
 var ThrowCompletion = require('es-abstract/2025/ThrowCompletion');
 
 var SuppressedError = require('suppressed-error/polyfill')();
 
-module.exports = function DisposeResources(disposeCapability, completion) {
-	// assertRecord('DisposeCapability Record', disposeCapability, 'disposeCapability'); ??
-	if (!(completion instanceof CompletionRecord)) {
-		throw new $TypeError('`completion` must be a Completion Record');
+var noop = function noop() {};
+
+// https://tc39.es/proposal-explicit-resource-management/#sec-disposeresources
+module.exports = function DisposeResources(disposeCapability, startCompletion) {
+	if (!(startCompletion instanceof CompletionRecord)) {
+		throw new $TypeError('Assertion failed: `completion` must be a Completion Record');
 	}
 
 	var stack = disposeCapability['[[DisposableResourceStack]]'];
 
-	if (!stack) {
-		throw new $TypeError('Assertion failed: `disposeCapability.[[DisposableResourceStack]]` must not be ~EMPTY~'); // step 1
-	}
+	var state = {
+		completion: startCompletion,
+		needsAwait: false, // step 1
+		hasAwaited: false // step 2
+	};
 
-	// for DisposableStack or AsyncDisposableStack, all are sync, or all are async.
-	// Only an environment record, via `using` and `await using`, can mix sync and async.
-	var actualHint;
-	for (var j = stack.length - 1; j >= 0; j -= 1) {
-		// assertRecord('DisposableResource Record', resource); ??
-		if (!actualHint) {
-			actualHint = stack[j]['[[Hint]]'];
-		} else if (actualHint !== stack[j]['[[Hint]]']) {
-			throw new $SyntaxError('mixed hint stacks are not supported');
-		}
-	}
-
-	var promise = actualHint === 'ASYNC-DISPOSE' && PromiseResolve($Promise, completion);
-
-	var rejecter = function (e) {
-		if (completion.type() === 'throw') { // step 2.b.i
-			var suppressed = completion.value(); // step 2.b.i.2
-			var error = new SuppressedError(e, suppressed); // steps 2.b.i.1, 2.b.i.3 - 2.b.i.5
-			// eslint-disable-next-line no-param-reassign
-			completion = ThrowCompletion(error); // step 2.b.i.6
-		} else { // step 2.b.ii
-			// eslint-disable-next-line no-param-reassign
-			completion = ThrowCompletion(e); // step 2.b.ii.1
+	// Fold a thrown value into `state.completion` per spec step 3.e.iii.
+	var recordThrow = function recordThrow(value) {
+		if (state.completion.type() === 'throw') { // step 3.e.iii.1
+			var result = value; // step 3.e.iii.1.a
+			var suppressed = state.completion.value(); // step 3.e.iii.1.b
+			var error = new SuppressedError(result, suppressed); // steps 3.e.iii.1.c, 1.d, 1.e
+			state.completion = ThrowCompletion(error); // step 3.e.iii.1.f
+		} else { // step 3.e.iii.2
+			state.completion = ThrowCompletion(value); // step 3.e.iii.2.a
 		}
 	};
 
-	var getPromise = actualHint === 'ASYNC-DISPOSE' && function getPromise(resource) {
-		var runDispose = function () {
-			try {
-				var result = Dispose( // step 2.a
-					resource['[[ResourceValue]]'],
-					resource['[[Hint]]'],
-					resource['[[DisposeMethod]]']
-				);
-				if (!result) {
-					throw new $SyntaxError('Assertion failed: non-`~ASYNC-DISPOSE~` resource returned a promise from Dispose');
-				}
-				return $then(result, void undefined, rejecter);
-			} catch (e) {
-				rejecter(e);
-			}
-			return void undefined;
+	// JS has no synchronous Await, so each Await effect becomes a microtask
+	// hop via `Promise.prototype.then`. The continuations below re-enter the
+	// loop at the correct index once the Await settles. They are declared
+	// outside of any loop to satisfy `no-loop-func`.
+	var resumeAtSameIndex = function resumeAtSameIndex(savedI) {
+		return function resumeAtSame() {
+			return runLoop(savedI); // eslint-disable-line no-use-before-define
 		};
-		return $then(
-			promise,
-			runDispose,
-			function (e) {
-				rejecter(e);
-				return runDispose();
-			}
-		);
+	};
+	var resumeAfterAsyncDispose = function resumeAfterAsyncDispose(savedI) {
+		return function resumeAfterAsync() {
+			return runLoop(savedI - 1); // eslint-disable-line no-use-before-define
+		};
+	};
+	var recordAndResume = function recordAndResume(savedI) {
+		return function asyncDisposeRejection(e) {
+			recordThrow(e);
+			return runLoop(savedI - 1); // eslint-disable-line no-use-before-define
+		};
 	};
 
-	for (var i = stack.length - 1; i >= 0; i -= 1) { // step 2
-		if (actualHint === 'ASYNC-DISPOSE') {
-			promise = getPromise(stack[i]);
-		} else {
-			var resource = stack[i];
-			try {
-				var result = Dispose( // step 2.a
-					resource['[[ResourceValue]]'],
-					resource['[[Hint]]'],
-					resource['[[DisposeMethod]]']
-				);
-				if (result) {
-					throw new $SyntaxError('Assertion failed: `~SYNC-DISPOSE~` resource returned something from Dispose');
-				}
-			} catch (e) {
-				rejecter(e);
+	// Process the spec's reverse-order loop (step 3) starting at `startI`.
+	// Returns `undefined` when processing has completed synchronously, or a
+	// Promise whose resolution resumes the loop.
+	var runLoop = function runLoop(startI) {
+		var i = startI;
+		while (i >= 0) {
+			var resource = stack[i]; // step 3 (element access, reverse order)
+			var value = resource['[[ResourceValue]]']; // step 3.a
+			var hint = resource['[[Hint]]']; // step 3.b
+			var method = resource['[[DisposeMethod]]']; // step 3.c
+
+			if (hint === 'SYNC-DISPOSE' && state.needsAwait && !state.hasAwaited) { // step 3.d
+				state.needsAwait = false; // step 3.d.ii
+				// step 3.d.i: Await(undefined). Resume at the SAME `i` because
+				// this resource has not yet been processed.
+				return $then(PromiseResolve($Promise, void undefined), resumeAtSameIndex(i));
 			}
+
+			// eslint-disable-next-line no-negated-condition
+			if (method !== void undefined) { // step 3.e
+				// step 3.e.i: Let result be Completion(Call(method, value)).
+				var callValue;
+				var callThrew = false;
+				try {
+					callValue = Call(method, value);
+				} catch (e) {
+					callThrew = true;
+					callValue = e;
+				}
+
+				if (!callThrew && hint === 'ASYNC-DISPOSE') { // step 3.e.ii
+					state.hasAwaited = true; // step 3.e.ii.2
+					// step 3.e.ii.1: Set result to Completion(Await(result.[[Value]])).
+					// Resume at `i - 1` after the Await settles; a rejection is
+					// folded into `state.completion` via step 3.e.iii.
+					return $then(
+						PromiseResolve($Promise, callValue),
+						resumeAfterAsyncDispose(i),
+						recordAndResume(i)
+					);
+				}
+
+				if (callThrew) {
+					recordThrow(callValue); // step 3.e.iii for a sync Call throw
+				}
+			} else { // step 3.f
+				// step 3.f.i: Assert: hint is ~async-dispose~.
+				state.needsAwait = true; // step 3.f.ii
+			}
+
+			i -= 1;
 		}
-	}
 
-	// eslint-disable-next-line no-param-reassign
-	disposeCapability['[[DisposableResourceStack]]'] = null; // step 3
+		if (state.needsAwait && !state.hasAwaited) { // step 4
+			// step 4.a: Await(undefined). Nothing to resume.
+			return $then(PromiseResolve($Promise, void undefined), noop);
+		}
 
-	if (actualHint === 'ASYNC-DISPOSE') { // step 4
-		return $then(promise, function () {
-			return completion;
-		});
+		return void undefined;
+	};
+
+	var finalize = function finalize() {
+		// step 5 (NOTE): the stack will never be used again.
+		// eslint-disable-next-line no-param-reassign
+		disposeCapability['[[DisposableResourceStack]]'] = []; // step 6
+		return state.completion; // step 7
+	};
+
+	var pending = runLoop(stack.length - 1);
+	if (pending && typeof pending.then === 'function') {
+		return $then(pending, finalize);
 	}
-	return completion;
+	return finalize();
 };

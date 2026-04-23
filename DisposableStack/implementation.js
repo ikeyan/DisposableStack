@@ -59,16 +59,21 @@ var markDisposed = function markDisposed(disposableStack) {
 	}
 };
 
+// https://tc39.es/proposal-explicit-resource-management/#sec-disposablestack.prototype.dispose
 CreateMethodProperty(DisposableStack.prototype, 'dispose', function dispose() {
 	var disposableStack = this; // step 1
 
-	if (isDisposed(disposableStack)) { // steps 2-3
+	// step 2: RequireInternalSlot(disposableStack, [[DisposableState]])
+	if (isDisposed(disposableStack)) { // step 3 (DisposableState is ~disposed~?)
 		return void undefined; // step 3
 	}
 
 	markDisposed(disposableStack); // step 4
 
-	return DisposeResources(SLOT.get(disposableStack, '[[DisposeCapability]]'), NormalCompletion())['?'](); // step 5
+	// step 5: Return DisposeResources(..., NormalCompletion(*undefined*)).
+	// The caller of a JS function sees either the normal value or the throw,
+	// which `['?']()` emulates on a Completion Record.
+	return DisposeResources(SLOT.get(disposableStack, '[[DisposeCapability]]'), NormalCompletion(void undefined))['?']();
 });
 
 CreateMethodProperty(DisposableStack.prototype, 'use', function use(value) {

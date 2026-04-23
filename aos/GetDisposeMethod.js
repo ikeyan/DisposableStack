@@ -1,7 +1,10 @@
 'use strict';
 
+var GetIntrinsic = require('get-intrinsic');
+
 var $SyntaxError = require('es-errors/syntax');
 var $TypeError = require('es-errors/type');
+var $Promise = GetIntrinsic('%Promise%', true);
 
 var Call = require('es-abstract/2025/Call');
 var GetMethod = require('es-abstract/2025/GetMethod');
@@ -12,49 +15,47 @@ var isObject = require('es-abstract/helpers/isObject');
 var symbolDispose = require('../Symbol.dispose/polyfill')();
 var symbolAsyncDispose = require('../Symbol.asyncDispose/polyfill')();
 
+// https://tc39.es/proposal-explicit-resource-management/#sec-getdisposemethod
 module.exports = function GetDisposeMethod(V, hint) {
 	if (!isObject(V)) {
-		throw new $TypeError('`V` must be an Object');
+		throw new $TypeError('Assertion failed: `V` must be an Object');
 	}
 	if (hint !== 'SYNC-DISPOSE' && hint !== 'ASYNC-DISPOSE') {
 		throw new $SyntaxError('Assertion failed: `hint` must be `~SYNC-DISPOSE~` or `~ASYNC-DISPOSE~`');
 	}
-
-	var method;
-	if (hint === 'ASYNC-DISPOSE' && symbolAsyncDispose) { // step 1
-		method = GetMethod(V, symbolAsyncDispose); // step 1.a
+	if (!symbolDispose) {
+		throw new $SyntaxError('`Symbol.dispose` is not supported');
 	}
 
-	if (!method) {
-		if (!symbolDispose) {
-			throw new $SyntaxError('`Symbol.dispose` is not supported');
+	var method;
+	if (hint === 'ASYNC-DISPOSE') { // step 1
+		if (symbolAsyncDispose) {
+			method = GetMethod(V, symbolAsyncDispose); // step 1.a
 		}
-		method = GetMethod(V, symbolDispose); // step 1.b.i, 2.a
-
-		if (typeof method !== 'undefined') { // step 1.b.ii
-			return function () { // step 1.b.ii.1, 1.b.ii.3
-				// eslint-disable-next-line no-invalid-this
-				var O = this; // step 1.b.ii.1.a
-				// Call(method, O); // step // step 1.b.ii.1.b
-
-				if (hint === 'ASYNC-DISPOSE') {
-					var promiseCapability = NewPromiseCapability(Promise); // step 1.b.ii.1.b
+		if (method === void undefined) { // step 1.b
+			method = GetMethod(V, symbolDispose); // step 1.b.i
+			if (method !== void undefined) { // step 1.b.ii
+				var innerMethod = method;
+				// step 1.b.ii.1: a closure that wraps a sync @@dispose so the
+				// returned Promise is not awaited and any exception is not
+				// thrown synchronously.
+				return function () { // step 1.b.ii.3 (CreateBuiltinFunction)
+					var O = this; // step 1.b.ii.1.a
+					var promiseCapability = NewPromiseCapability($Promise); // step 1.b.ii.1.b
 					try {
-						Call(method, O); // step 1.b.ii.1.c
-
-						Call(promiseCapability['[[Resolve]]'], undefined, [undefined]); // step 1.b.ii.1.e
+						Call(innerMethod, O); // step 1.b.ii.1.c (Completion(Call(method, O)))
 					} catch (e) {
-						promiseCapability['[[Reject]]'](e); // step 1.b.ii.1.d
+						// step 1.b.ii.1.d: IfAbruptRejectPromise
+						Call(promiseCapability['[[Reject]]'], void undefined, [e]);
+						return promiseCapability['[[Promise]]'];
 					}
-
+					Call(promiseCapability['[[Resolve]]'], void undefined, [void undefined]); // step 1.b.ii.1.e
 					return promiseCapability['[[Promise]]']; // step 1.b.ii.1.f
-				}
-
-				Call(method, O);
-
-				return void undefined;
-			};
+				};
+			}
 		}
+	} else { // step 2
+		method = GetMethod(V, symbolDispose); // step 2.a
 	}
 
 	return method; // step 3

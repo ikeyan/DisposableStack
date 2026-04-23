@@ -11,6 +11,7 @@ var callBound = require('call-bound');
 
 var $push = callBound('Array.prototype.push');
 
+// https://tc39.es/proposal-explicit-resource-management/#sec-adddisposableresource
 module.exports = function AddDisposableResource(disposeCapability, V, hint) {
 	if (!isDisposeCapabilityRecord(disposeCapability)) {
 		throw new $TypeError('Assertion failed: `disposeCapability` must be a DisposeCapability Record');
@@ -18,25 +19,22 @@ module.exports = function AddDisposableResource(disposeCapability, V, hint) {
 	if (hint !== 'SYNC-DISPOSE' && hint !== 'ASYNC-DISPOSE') {
 		throw new $SyntaxError('Assertion failed: `hint` must be `~SYNC-DISPOSE~` or `~ASYNC-DISPOSE~`');
 	}
-	var method = arguments.length > 3 ? arguments[3] : void undefined;
-	if (arguments.length > 3 && typeof method !== 'function') {
+	var methodPresent = arguments.length > 3;
+	var method = methodPresent ? arguments[3] : void undefined;
+	if (methodPresent && typeof method !== 'function') {
 		throw new $TypeError('Assertion failed: `method`, when present, must be a function');
 	}
 
-	if (!disposeCapability['[[DisposableResourceStack]]']) {
-		throw new $TypeError('Assertion failed: `disposeCapability.[[DisposableResourceStack]]` must not be ~EMPTY~');
-	}
-
 	var resource;
-	if (arguments.length < 4) { // step 1
-		if (V == null && hint === 'SYNC-DISPOSE') {
-			return 'UNUSED'; // step 1.a
+	// eslint-disable-next-line no-negated-condition
+	if (!methodPresent) { // step 1
+		if ((V === null || V === void undefined) && hint === 'SYNC-DISPOSE') { // step 1.a
+			return 'UNUSED'; // step 1.a.i
 		}
+		// step 1.b: NOTE
 		resource = CreateDisposableResource(V, hint); // step 1.c
 	} else { // step 2
-		if (typeof V !== 'undefined') {
-			throw new $TypeError('Assertion failed: `V` must be undefined when `method` is present'); // step 2.a
-		}
+		// step 2.a: Assert: V is undefined.
 		resource = CreateDisposableResource(void undefined, hint, method); // step 2.b
 	}
 	$push(disposeCapability['[[DisposableResourceStack]]'], resource); // step 3
