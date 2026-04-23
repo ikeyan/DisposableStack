@@ -34,7 +34,9 @@ module.exports = function AddDisposableResource(disposeCapability, V, hint) {
 		// step 1.b: NOTE
 		resource = CreateDisposableResource(V, hint); // step 1.c
 	} else { // step 2
-		// step 2.a: Assert: V is undefined.
+		if (V !== void undefined) {
+			throw new $TypeError('Assertion failed: `V` must be `undefined` when `method` is present'); // step 2.a
+		}
 		resource = CreateDisposableResource(void undefined, hint, method); // step 2.b
 	}
 	$push(disposeCapability['[[DisposableResourceStack]]'], resource); // step 3
