@@ -23,7 +23,7 @@ module.exports = function CreateDisposableResource(V, hint, method) {
 			// step 1.a.ii: Set method to undefined. (already undefined since not passed)
 		} else { // step 1.b
 			if (!isObject(V)) {
-				throw new $TypeError('`V` must be an Object'); // step 1.b.i
+				throw new $TypeError('`V` must be an Object, or `null` or `undefined`'); // step 1.b.i
 			}
 			// eslint-disable-next-line no-param-reassign
 			method = GetDisposeMethod(V, hint); // step 1.b.ii
